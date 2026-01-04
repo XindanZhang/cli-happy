@@ -7,7 +7,7 @@ import { ReasoningProcessor } from './utils/reasoningProcessor';
 import { DiffProcessor } from './utils/diffProcessor';
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
-import { Credentials, readSettings } from '@/persistence';
+import { Credentials, readSettings, updateSettings } from '@/persistence';
 import { AgentState, Metadata } from '@/api/types';
 import { initialMachineMetadata } from '@/daemon/run';
 import { configuration } from '@/configuration';
@@ -68,10 +68,12 @@ export async function runCodex(opts: {
     model?: string;
     permissionMode?: PermissionMode;
     profile?: string;
+    showSettings?: boolean;
 }): Promise<void> {
     interface EnhancedMode {
         permissionMode: PermissionMode;
         model?: string;
+        profile?: string;
     }
 
     //
@@ -144,12 +146,18 @@ export async function runCodex(opts: {
     const messageQueue = new MessageQueue2<EnhancedMode>((mode) => hashObject({
         permissionMode: mode.permissionMode,
         model: mode.model,
+        profile: mode.profile,
     }));
 
     // Track current overrides to apply per message
-    let currentPermissionMode: PermissionMode | undefined = opts.permissionMode;
-    let currentModel: string | undefined = opts.model;
-    const sessionProfile: string | undefined = opts.profile;
+    const persistedPermissionMode = (() => {
+        const value = settings?.codex?.permissionMode as PermissionMode | undefined;
+        const validModes: PermissionMode[] = ['default', 'read-only', 'safe-yolo', 'yolo'];
+        return value && validModes.includes(value) ? value : undefined;
+    })();
+    let currentPermissionMode: PermissionMode | undefined = opts.permissionMode ?? persistedPermissionMode;
+    let currentModel: string | undefined = opts.model ?? settings?.codex?.model;
+    let currentProfile: string | undefined = opts.profile ?? settings?.codex?.profile;
 
     session.onUserMessage((message) => {
         // Resolve permission mode (validate)
@@ -177,9 +185,20 @@ export async function runCodex(opts: {
             logger.debug(`[Codex] User message received with no model override, using current: ${currentModel || 'default'}`);
         }
 
+        // Resolve profile; explicit null resets to default (undefined)
+        let messageProfile = currentProfile;
+        if (message.meta?.hasOwnProperty('profile')) {
+            messageProfile = (message.meta as any).profile || undefined;
+            currentProfile = messageProfile;
+            logger.debug(`[Codex] Profile updated from user message: ${messageProfile || 'reset to default'}`);
+        } else {
+            logger.debug(`[Codex] User message received with no profile override, using current: ${currentProfile || 'default'}`);
+        }
+
         const enhancedMode: EnhancedMode = {
             permissionMode: messagePermissionMode || 'default',
             model: messageModel,
+            profile: messageProfile,
         };
         messageQueue.push(message.content.text, enhancedMode);
     });
@@ -319,20 +338,63 @@ export async function runCodex(opts: {
         const defaults: string[] = [];
         if (currentModel) defaults.push(`model=${currentModel}`);
         if (currentPermissionMode) defaults.push(`permission-mode=${currentPermissionMode}`);
-        if (sessionProfile) defaults.push(`profile=${sessionProfile}`);
+        if (currentProfile) defaults.push(`profile=${currentProfile}`);
         if (defaults.length > 0) {
             messageBuffer.addMessage(`Defaults: ${defaults.join(' ')}`, 'system');
         }
-        inkInstance = render(React.createElement(CodexDisplay, {
+
+        const initialShowSettings = (opts.startedBy || 'terminal') === 'terminal'
+            && (opts.showSettings || (!settings?.codex?.configured && !opts.model && !opts.permissionMode && !opts.profile));
+
+        const renderRoot = () => React.createElement(CodexDisplay, {
             messageBuffer,
             logPath: process.env.DEBUG ? logger.getLogPath() : undefined,
+            settings: {
+                model: currentModel,
+                permissionMode: currentPermissionMode,
+                profile: currentProfile,
+            },
+            initialShowSettings,
+            onUpdateSettings: async (next) => {
+                // Update runtime defaults
+                currentModel = next.model;
+                currentPermissionMode = next.permissionMode;
+                currentProfile = next.profile;
+
+                // Persist defaults for future runs
+                await updateSettings((current) => ({
+                    ...current,
+                    codex: {
+                        ...current.codex,
+                        configured: true,
+                        model: next.model,
+                        permissionMode: next.permissionMode,
+                        profile: next.profile,
+                    }
+                }));
+
+                const updatedDefaults: string[] = [];
+                if (currentModel) updatedDefaults.push(`model=${currentModel}`);
+                if (currentPermissionMode) updatedDefaults.push(`permission-mode=${currentPermissionMode}`);
+                if (currentProfile) updatedDefaults.push(`profile=${currentProfile}`);
+                if (updatedDefaults.length > 0) {
+                    messageBuffer.addMessage(`Defaults updated: ${updatedDefaults.join(' ')}`, 'system');
+                } else {
+                    messageBuffer.addMessage('Defaults updated: (Codex config defaults)', 'system');
+                }
+
+                // Refresh UI props for the next time settings are opened
+                inkInstance?.rerender?.(renderRoot());
+            },
             onExit: async () => {
                 // Exit the agent
                 logger.debug('[codex]: Exiting agent via Ctrl-C');
                 shouldExit = true;
                 await handleAbort();
             }
-        }), {
+        });
+
+        inkInstance = render(renderRoot(), {
             exitOnCtrlC: false,
             patchConsole: false
         });
@@ -635,7 +697,7 @@ export async function runCodex(opts: {
                         case 'default': return 'untrusted' as const;
                         case 'read-only': return 'never' as const;
                         case 'safe-yolo': return 'on-failure' as const;
-                        case 'yolo': return 'on-failure' as const;
+                        case 'yolo': return 'never' as const;
                     }
                 })();
                 const sandbox = (() => {
@@ -647,6 +709,8 @@ export async function runCodex(opts: {
                     }
                 })();
 
+                permissionHandler.setPermissionMode(message.mode.permissionMode);
+
                 if (!wasCreated) {
                     const startConfig: CodexSessionConfig = {
                         prompt: first ? message.message + '\n\n' + CHANGE_TITLE_INSTRUCTION : message.message,
@@ -657,8 +721,8 @@ export async function runCodex(opts: {
                     if (message.mode.model) {
                         startConfig.model = message.mode.model;
                     }
-                    if (sessionProfile) {
-                        startConfig.profile = sessionProfile;
+                    if (message.mode.profile) {
+                        startConfig.profile = message.mode.profile;
                     }
                     
                     // Check for resume file from multiple sources

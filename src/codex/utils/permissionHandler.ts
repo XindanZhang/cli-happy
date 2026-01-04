@@ -9,6 +9,8 @@ import { logger } from "@/ui/logger";
 import { ApiSessionClient } from "@/api/apiSession";
 import { AgentState } from "@/api/types";
 
+type PermissionMode = 'default' | 'read-only' | 'safe-yolo' | 'yolo';
+
 interface PermissionResponse {
     id: string;
     approved: boolean;
@@ -29,10 +31,16 @@ interface PermissionResult {
 export class CodexPermissionHandler {
     private pendingRequests = new Map<string, PendingRequest>();
     private session: ApiSessionClient;
+    private currentPermissionMode: PermissionMode = 'default';
 
     constructor(session: ApiSessionClient) {
         this.session = session;
         this.setupRpcHandler();
+    }
+
+    setPermissionMode(mode: PermissionMode): void {
+        this.currentPermissionMode = mode;
+        logger.debug(`[Codex] Permission mode set to: ${mode}`);
     }
 
     /**
@@ -47,6 +55,27 @@ export class CodexPermissionHandler {
         toolName: string,
         input: unknown
     ): Promise<PermissionResult> {
+        if (this.currentPermissionMode === 'yolo') {
+            logger.debug(`[Codex] Auto-approving tool ${toolName} (${toolCallId}) in yolo mode`);
+
+            this.session.updateAgentState((currentState) => ({
+                ...currentState,
+                completedRequests: {
+                    ...currentState.completedRequests,
+                    [toolCallId]: {
+                        tool: toolName,
+                        arguments: input,
+                        createdAt: Date.now(),
+                        completedAt: Date.now(),
+                        status: 'approved',
+                        decision: 'approved_for_session'
+                    }
+                }
+            }));
+
+            return { decision: 'approved_for_session' };
+        }
+
         return new Promise<PermissionResult>((resolve, reject) => {
             // Store the pending request
             this.pendingRequests.set(toolCallId, {

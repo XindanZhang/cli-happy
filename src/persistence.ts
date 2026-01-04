@@ -19,6 +19,12 @@ interface Settings {
   machineId?: string
   machineIdConfirmedByServer?: boolean
   daemonAutoStartWhenRunningHappy?: boolean
+  codex?: {
+    configured?: boolean
+    model?: string
+    permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo'
+    profile?: string
+  }
 }
 
 const defaultSettings: Settings = {
@@ -319,4 +325,3 @@ export async function releaseDaemonLock(lockHandle: FileHandle): Promise<void> {
     }
   } catch { }
 }
-

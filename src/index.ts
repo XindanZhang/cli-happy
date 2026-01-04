@@ -91,6 +91,7 @@ import { execFileSync } from 'node:child_process'
       let codexModel: string | undefined = undefined;
       let codexPermissionMode: 'default' | 'read-only' | 'safe-yolo' | 'yolo' | undefined = undefined;
       let codexProfile: string | undefined = undefined;
+      let codexShowSettings = false;
       let showCodexHelp = false;
       for (let i = 1; i < args.length; i++) {
         const arg = args[i];
@@ -102,6 +103,11 @@ import { execFileSync } from 'node:child_process'
 
         if (arg === '--started-by') {
           startedBy = args[++i] as 'daemon' | 'terminal';
+          continue;
+        }
+
+        if (arg === '--settings') {
+          codexShowSettings = true;
           continue;
         }
 
@@ -122,6 +128,11 @@ import { execFileSync } from 'node:child_process'
             process.exit(1);
           }
           codexPermissionMode = z.enum(['default', 'read-only', 'safe-yolo', 'yolo']).parse(value);
+          continue;
+        }
+
+        if (arg === '--yolo') {
+          codexPermissionMode = 'yolo';
           continue;
         }
 
@@ -151,6 +162,8 @@ ${chalk.bold('Options:')}
   -h, --help                         Show this help
   -m, --model <MODEL>                Codex model to use for this session
   --permission-mode <MODE>           default | read-only | safe-yolo | yolo
+  --yolo                             Alias for --permission-mode yolo (full access)
+  --settings                         Open an interactive settings menu at startup
   -p, --profile <PROFILE>            Codex config profile name
   --started-by <daemon|terminal>     Internal (used by daemon)
 
@@ -164,7 +177,7 @@ ${chalk.bold('Notes:')}
       const {
         credentials
       } = await authAndSetupMachineIfNeeded();
-      await runCodex({credentials, startedBy, model: codexModel, permissionMode: codexPermissionMode, profile: codexProfile});
+      await runCodex({credentials, startedBy, model: codexModel, permissionMode: codexPermissionMode, profile: codexProfile, showSettings: codexShowSettings});
       // Do not force exit here; allow instrumentation to show lingering handles
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
