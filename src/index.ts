@@ -111,6 +111,14 @@ import { execFileSync } from 'node:child_process'
           continue;
         }
 
+        if (arg === '--happy-starting-mode') {
+          // Internal flag used by the daemon when spawning remote sessions.
+          // Codex mode does not currently use this value, but we accept it so
+          // remote spawns don't fail with "Unknown argument".
+          i++; // consume value (local|remote)
+          continue;
+        }
+
         if (arg === '-m' || arg === '--model') {
           const value = args[++i];
           if (!value) {
