@@ -6,8 +6,8 @@ import { ApiMachineClient } from './apiMachine';
 import { decodeBase64, encodeBase64, getRandomBytes, encrypt, decrypt, libsodiumEncryptForPublicKey } from './encryption';
 import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
-import chalk from 'chalk';
 import { Credentials } from '@/persistence';
+import type { AxiosResponse } from 'axios';
 
 export class ApiClient {
 
@@ -121,27 +121,41 @@ export class ApiClient {
     }
 
     // Create machine
-    const response = await axios.post(
-      `${configuration.serverUrl}/v1/machines`,
-      {
-        id: opts.machineId,
-        metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
-        daemonState: opts.daemonState ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.daemonState)) : undefined,
-        dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : undefined
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${this.credential.token}`,
-          'Content-Type': 'application/json'
+    let response: AxiosResponse<any>;
+    try {
+      response = await axios.post(
+        `${configuration.serverUrl}/v1/machines`,
+        {
+          id: opts.machineId,
+          metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
+          daemonState: opts.daemonState ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.daemonState)) : undefined,
+          dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : undefined
         },
-        timeout: 60000 // 1 minute timeout for very bad network connections
-      }
-    );
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000, // 1 minute timeout for very bad network connections
+          validateStatus: () => true
+        }
+      );
+    } catch (error) {
+      logger.debug('[API] [ERROR] Failed to create machine:', error);
+      throw new Error(`Failed to register machine with Happy server: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
 
     if (response.status !== 200) {
-      console.error(chalk.red(`[API] Failed to create machine: ${response.statusText}`));
-      console.log(chalk.yellow(`[API] Failed to create machine: ${response.statusText}, most likely you have re-authenticated, but you still have a machine associated with the old account. Now we are trying to re-associate the machine with the new account. That is not allowed. Please run 'happy doctor clean' to clean up your happy state, and try your original command again. Please create an issue on github if this is causing you problems. We apologize for the inconvenience.`));
-      process.exit(1);
+      const status = response.status as number;
+      logger.debug(`[API] [ERROR] Failed to create machine: status=${status}`);
+
+      if ([401, 403, 404].includes(status)) {
+        throw new Error(
+          `Happy rejected machine registration (HTTP ${status}). Your credentials or machine ID may be stale. Run 'happy auth login --force' and try again.`
+        );
+      }
+
+      throw new Error(`Failed to register machine with Happy server (HTTP ${status}).`);
     }
 
     const raw = response.data.machine;

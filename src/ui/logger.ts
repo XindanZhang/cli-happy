@@ -12,6 +12,65 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { readDaemonState } from '@/persistence'
 
+const SENSITIVE_KEY_REGEX = /^(authorization|token|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|api[_-]?key|private[_-]?key|machine[_-]?key)$/i;
+
+function redactString(value: string): string {
+  return value.replace(/\bBearer\s+[\w.\-~+/]+=*\b/g, 'Bearer [REDACTED]');
+}
+
+function sanitizeForLogging(value: unknown, visited: WeakSet<object> = new WeakSet()): unknown {
+  if (value == null) return value;
+  if (typeof value === 'string') return redactString(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+
+  if (value instanceof Error) {
+    const base: Record<string, unknown> = {
+      name: value.name,
+      message: redactString(value.message),
+      stack: value.stack ? redactString(value.stack) : undefined
+    };
+
+    for (const [key, entry] of Object.entries(value)) {
+      base[key] = sanitizeForLogging(entry, visited);
+    }
+
+    return base;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeForLogging(entry, visited));
+  }
+
+  if (typeof value === 'object') {
+    if (visited.has(value as object)) {
+      return '[Circular]';
+    }
+    visited.add(value as object);
+
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_KEY_REGEX.test(key)) {
+        result[key] = '[REDACTED]';
+      } else {
+        result[key] = sanitizeForLogging(entry, visited);
+      }
+    }
+    return result;
+  }
+
+  return value;
+}
+
+function stringifyForLog(value: unknown): string {
+  if (typeof value === 'string') return redactString(value);
+
+  try {
+    return JSON.stringify(sanitizeForLogging(value));
+  } catch {
+    return '[Unserializable]';
+  }
+}
+
 /**
  * Consistent date/time formatting functions
  */
@@ -118,7 +177,7 @@ class Logger {
       return obj
     }
 
-    const truncatedObject = truncateStrings(object)
+    const truncatedObject = truncateStrings(sanitizeForLogging(object))
     const json = JSON.stringify(truncatedObject, null, 2)
     this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, '\n', json)
   }
@@ -187,9 +246,7 @@ class Logger {
         body: JSON.stringify({
           timestamp: new Date().toISOString(),
           level,
-          message: `${message} ${args.map(a => 
-            typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)
-          ).join(' ')}`,
+          message: `${redactString(message)} ${args.map((arg) => stringifyForLog(arg)).join(' ')}`,
           source: 'cli',
           platform: process.platform
         })
@@ -200,9 +257,7 @@ class Logger {
   }
 
   private logToFile(prefix: string, message: string, ...args: unknown[]): void {
-    const logLine = `${prefix} ${message} ${args.map(arg => 
-      typeof arg === 'string' ? arg : JSON.stringify(arg)
-    ).join(' ')}\n`
+    const logLine = `${prefix} ${redactString(message)} ${args.map((arg) => stringifyForLog(arg)).join(' ')}\n`
     
     // Send to remote server if configured
     if (this.dangerouslyUnencryptedServerLoggingUrl) {

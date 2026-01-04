@@ -397,6 +397,17 @@ ${chalk.bold('Notes:')}
       }
 
       if (started) {
+        // Give the daemon a moment to fail fast (e.g., auth / machine registration issues)
+        await new Promise(resolve => setTimeout(resolve, 750));
+
+        const stillRunning = await checkIfDaemonRunningAndCleanupStaleState();
+        if (!stillRunning) {
+          console.error('Daemon crashed during startup');
+          console.error(`- Run 'happy daemon logs' to inspect the last daemon log`);
+          console.error(`- If this started after re-auth, run 'happy auth login --force' then retry`);
+          process.exit(1);
+        }
+
         console.log('Daemon started successfully');
       } else {
         console.error('Failed to start daemon');
