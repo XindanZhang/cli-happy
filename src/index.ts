@@ -177,6 +177,20 @@ ${chalk.bold('Notes:')}
       const {
         credentials
       } = await authAndSetupMachineIfNeeded();
+
+      // Ensure daemon is running so the mobile app can discover this machine and spawn sessions
+      logger.debug('Ensuring Happy background service is running & matches our version...');
+      if (!(await isDaemonRunningCurrentlyInstalledHappyVersion())) {
+        logger.debug('Starting Happy background service...');
+        const daemonProcess = spawnHappyCLI(['daemon', 'start-sync'], {
+          detached: true,
+          stdio: 'ignore',
+          env: process.env
+        });
+        daemonProcess.unref();
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
       await runCodex({credentials, startedBy, model: codexModel, permissionMode: codexPermissionMode, profile: codexProfile, showSettings: codexShowSettings});
       // Do not force exit here; allow instrumentation to show lingering handles
     } catch (error) {
