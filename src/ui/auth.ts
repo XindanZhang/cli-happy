@@ -13,6 +13,19 @@ import { render } from 'ink';
 import React from 'react';
 import { randomUUID } from 'node:crypto';
 import { logger } from './logger';
+import type { AxiosResponse } from 'axios';
+
+function formatAuthRequestFailure(status: number | undefined): string {
+    if (!status) {
+        return 'Failed to reach the Happy server.';
+    }
+
+    if (status === 404) {
+        return `Happy server returned HTTP 404. The server URL may be wrong, or Happy’s backend may be down.`;
+    }
+
+    return `Happy server returned HTTP ${status}.`;
+}
 
 export async function doAuth(): Promise<Credentials | null> {
     console.clear();
@@ -29,19 +42,37 @@ export async function doAuth(): Promise<Credentials | null> {
     const keypair = tweetnacl.box.keyPair.fromSecretKey(secret);
 
     // Create a new authentication request
+    process.stdout.write('Creating authentication request...');
+    let createResponse: AxiosResponse<any>;
     try {
-        console.log(`[AUTH DEBUG] Sending auth request to: ${configuration.serverUrl}/v1/auth/request`);
-        console.log(`[AUTH DEBUG] Public key: ${encodeBase64(keypair.publicKey).substring(0, 20)}...`);
-        await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
-            publicKey: encodeBase64(keypair.publicKey),
-            supportsV2: true
-        });
-        console.log(`[AUTH DEBUG] Auth request sent successfully`);
+        createResponse = await axios.post(
+            `${configuration.serverUrl}/v1/auth/request`,
+            {
+                publicKey: encodeBase64(keypair.publicKey),
+                supportsV2: true
+            },
+            {
+                timeout: 60_000,
+                validateStatus: () => true
+            }
+        );
     } catch (error) {
-        console.log(`[AUTH DEBUG] Failed to send auth request:`, error);
-        console.log('Failed to create authentication request, please try again later.');
-        return null;
+        logger.debug('[AUTH] Failed to create auth request', error);
+        console.log('\n');
+        throw new Error(`${formatAuthRequestFailure(undefined)} Please try again later.`);
     }
+
+    if (createResponse.status !== 200) {
+        logger.debug('[AUTH] Failed to create auth request', {
+            status: createResponse.status,
+            statusText: createResponse.statusText,
+            data: createResponse.data
+        });
+        console.log('\n');
+        throw new Error(`${formatAuthRequestFailure(createResponse.status)} If you use a custom server URL in the mobile app, set HAPPY_SERVER_URL to match and retry.`);
+    }
+
+    console.log(' done.');
 
     // Handle authentication based on selected method
     if (authMethod === 'mobile') {
@@ -148,11 +179,36 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
 
     try {
         while (!cancelled) {
+            let response: AxiosResponse<any>;
             try {
-                const response = await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
-                    publicKey: encodeBase64(keypair.publicKey),
-                    supportsV2: true
+                response = await axios.post(
+                    `${configuration.serverUrl}/v1/auth/request`,
+                    {
+                        publicKey: encodeBase64(keypair.publicKey),
+                        supportsV2: true
+                    },
+                    {
+                        timeout: 60_000,
+                        validateStatus: () => true
+                    }
+                );
+            } catch (error) {
+                logger.debug('[AUTH] Failed to poll auth status', error);
+                console.log('\n');
+                throw new Error(`${formatAuthRequestFailure(undefined)} Please try again later.`);
+            }
+
+            if (response.status !== 200) {
+                logger.debug('[AUTH] Failed to poll auth status', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    data: response.data
                 });
+                console.log('\n');
+                throw new Error(`${formatAuthRequestFailure(response.status)} Please try again later.`);
+            }
+
+            try {
                 if (response.data.state === 'authorized') {
                     let token = response.data.token as string;
                     let r = decodeBase64(response.data.response);
@@ -200,8 +256,9 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
                     }
                 }
             } catch (error) {
-                console.log('\n\nFailed to check authentication status. Please try again.');
-                return null;
+                logger.debug('[AUTH] Invalid auth response payload', error);
+                console.log('\n');
+                throw new Error('Failed to parse authentication response. Please try again.');
             }
 
             // Animate waiting dots
