@@ -342,20 +342,23 @@ export const CodexDisplay: React.FC<CodexDisplayProps> = ({
             return ''
         }
 
+        const modelHintText = (() => {
+            const bits: string[] = ['Leave empty to use Codex default model.']
+            if (modelHints?.defaultModel) {
+                bits.push(`Detected default: ${modelHints.defaultModel}`)
+            }
+            if (modelHints?.migratedModel) {
+                bits.push(`Suggested: ${modelHints.migratedModel}`)
+            }
+            bits.push('To browse models: run `codex` and use `/model`.');
+            return bits.join(' ')
+        })()
+
         const helpText = (() => {
-            if (editingField === 'model') return 'Editing model: Enter to save • Esc to cancel'
+            if (editingField === 'model') return `Editing model: Enter to save • Esc to cancel • ${modelHintText}`
             if (editingField === 'profile') return 'Editing profile: Enter to save • Esc to cancel'
             if (selectedKey === 'permissionMode') return currentSelectedPermissionMode?.description || ''
-            if (selectedKey === 'model') {
-                const bits: string[] = ['Leave empty to use Codex default model.']
-                if (modelHints?.defaultModel) {
-                    bits.push(`Detected default: ${modelHints.defaultModel}`)
-                }
-                if (modelHints?.migratedModel) {
-                    bits.push(`Suggested: ${modelHints.migratedModel}`)
-                }
-                return bits.join(' ')
-            }
+            if (selectedKey === 'model') return modelHintText
             if (selectedKey === 'profile') return 'Leave empty to use Codex default profile.'
             if (selectedKey === 'save') return 'Applies these defaults for new turns/sessions.'
             return 'Esc or s to close without saving.'
