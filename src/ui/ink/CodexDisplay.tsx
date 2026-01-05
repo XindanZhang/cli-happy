@@ -994,7 +994,7 @@ export const CodexDisplay: React.FC<CodexDisplayProps> = ({
                     <>
                         <Box width="100%" justifyContent="center">
                             <Text color="green" bold wrap="truncate">
-                                ⌨️  Local mode • Enter to send • /settings • /remote • Ctrl-C to exit
+                                ⌨️  Local mode • Enter to send • /settings • /remote • /image • Ctrl-C to exit
                             </Text>
                         </Box>
                         <Box width="100%" flexDirection="column">

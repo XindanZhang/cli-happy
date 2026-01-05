@@ -46,6 +46,11 @@ type ImageAttachParseResult = {
     usedCommand: boolean;
 };
 
+type InlineImageAttachResult = {
+    path: string;
+    prompt?: string;
+};
+
 const LOCAL_IMAGE_EXTENSIONS = new Set([
     '.png',
     '.jpg',
@@ -121,6 +126,47 @@ function parseImageAttachInput(messageText: string): ImageAttachParseResult | nu
         path: normalized,
         usedCommand: false,
     };
+}
+
+function parseInlineImageAttachInput(messageText: string): InlineImageAttachResult | null {
+    if (!messageText) return null;
+    if (messageText.includes('![](') || messageText.includes('![')) {
+        return null;
+    }
+
+    const extensions = Array.from(LOCAL_IMAGE_EXTENSIONS)
+        .map((ext) => ext.replace('.', ''))
+        .join('|');
+
+    const patterns: RegExp[] = [
+        new RegExp(`(^|\\s)(\\/(?:[^\\n])*?\\.(${extensions}))`, 'i'),
+        new RegExp(`(^|\\s)(~\\/(?:[^\\n])*?\\.(${extensions}))`, 'i'),
+        new RegExp(`(^|\\s)((?:\\.\\/|\\.\\.\\/)(?:[^\\n])*?\\.(${extensions}))`, 'i'),
+        new RegExp(`(^|\\s)([A-Za-z]:\\\\(?:[^\\n])*?\\.(${extensions}))`, 'i'),
+    ];
+
+    for (const pattern of patterns) {
+        const match = messageText.match(pattern);
+        const rawPath = match?.[2];
+        if (!rawPath) continue;
+
+        const normalized = normalizeDraggedPath(rawPath);
+        const resolved = isAbsolute(normalized) ? normalized : resolve(process.cwd(), normalized);
+        try {
+            const stats = fs.statSync(resolved);
+            if (!stats.isFile()) continue;
+        } catch {
+            continue;
+        }
+
+        const prompt = messageText.replace(rawPath, '').trim();
+        return {
+            path: rawPath,
+            prompt: prompt || undefined,
+        };
+    }
+
+    return null;
 }
 
 function attachLocalImage(rawPath: string, prompt?: string): { prompt: string; referencePath: string; copied: boolean } {
@@ -584,9 +630,14 @@ export async function runCodex(opts: {
                 }
 
                 const imageInput = parseImageAttachInput(messageText);
-                if (imageInput) {
+                const inlineImageInput = imageInput ? null : parseInlineImageAttachInput(messageText);
+                const resolvedImageInput = imageInput
+                    ? { path: imageInput.path, prompt: imageInput.prompt }
+                    : inlineImageInput;
+
+                if (resolvedImageInput) {
                     try {
-                        const attached = attachLocalImage(imageInput.path, imageInput.prompt);
+                        const attached = attachLocalImage(resolvedImageInput.path, resolvedImageInput.prompt);
                         messageText = attached.prompt;
                         messageBuffer.addMessage(
                             attached.copied
