@@ -970,47 +970,55 @@ export const CodexDisplay: React.FC<CodexDisplayProps> = ({
                     "green"
                 }
                 paddingX={2}
-                justifyContent="center"
-                alignItems="center"
                 flexDirection="column"
             >
-                <Box flexDirection="column" alignItems="center">
-                    {actionInProgress ? (
-                        <Text color="gray" bold>
+                {actionInProgress ? (
+                    <Box width="100%" justifyContent="center">
+                        <Text color="gray" bold wrap="truncate">
                             {actionLabel || 'Working...'}
                         </Text>
-                    ) : settingsOpen ? (
-                        <Text color="yellow" bold>
+                    </Box>
+                ) : settingsOpen ? (
+                    <Box width="100%" justifyContent="center">
+                        <Text color="yellow" bold wrap="truncate">
                             {activePicker ? 'Settings • Enter to select • Esc to go back' : 'Settings • Enter to select • Esc to close'}
                         </Text>
-                    ) : confirmationMode ? (
-                        <Text color="red" bold>
+                    </Box>
+                ) : confirmationMode ? (
+                    <Box width="100%" justifyContent="center">
+                        <Text color="red" bold wrap="truncate">
                             ⚠️  Press Ctrl-C again to exit the agent
                         </Text>
-                    ) : mode === 'local' ? (
-                        <>
-                            <Text color="green" bold>
+                    </Box>
+                ) : mode === 'local' ? (
+                    <>
+                        <Box width="100%" justifyContent="center">
+                            <Text color="green" bold wrap="truncate">
                                 ⌨️  Local mode • Enter to send • /settings • /remote • Ctrl-C to exit
                             </Text>
+                        </Box>
+                        <Box width="100%" flexDirection="column">
                             {promptLines.map((line, idx) => (
-                                <Text key={`prompt-${idx}`} color="white">
+                                <Text key={`prompt-${idx}`} color="white" wrap="truncate">
                                     {line}
                                 </Text>
                             ))}
-                        </>
-                    ) : (
-                        <>
-                            <Text color="green" bold>
-                                📡 Remote mode • Ctrl-C to take over locally • s Settings
-                            </Text>
-                        </>
-                    )}
-                    {process.env.DEBUG && logPath && (
-                        <Text color="gray" dimColor>
+                        </Box>
+                    </>
+                ) : (
+                    <Box width="100%" justifyContent="center">
+                        <Text color="green" bold wrap="truncate">
+                            📡 Remote mode • Ctrl-C to take over locally • s Settings
+                        </Text>
+                    </Box>
+                )}
+                {process.env.DEBUG && logPath && (
+                    <Box width="100%" justifyContent="center">
+                        <Text color="gray" dimColor wrap="truncate">
                             Debug logs: {logPath}
                         </Text>
-                    )}
-                </Box>
+                    </Box>
+                )}
             </Box>
         </Box>
     )

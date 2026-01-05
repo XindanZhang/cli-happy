@@ -16,7 +16,7 @@ import os from 'node:os';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
 import { projectPath } from '@/projectPath';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative, extname, isAbsolute, sep } from 'node:path';
 import fs from 'node:fs';
 import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { MessageBuffer } from "@/ui/ink/messageBuffer";
@@ -39,6 +39,139 @@ type ReadyEventOptions = {
     sendReady: () => void;
     notify?: () => void;
 };
+
+type ImageAttachParseResult = {
+    path: string;
+    prompt?: string;
+    usedCommand: boolean;
+};
+
+const LOCAL_IMAGE_EXTENSIONS = new Set([
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.tif',
+    '.tiff',
+    '.heic',
+    '.heif',
+]);
+
+function toPosixPath(pathValue: string): string {
+    return pathValue.split(sep).join('/');
+}
+
+function stripWrappingQuotes(value: string): string {
+    const trimmed = value.trim();
+    if (trimmed.length < 2) return trimmed;
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+        return trimmed.slice(1, -1);
+    }
+    return trimmed;
+}
+
+function normalizeDraggedPath(value: string): string {
+    let normalized = stripWrappingQuotes(value);
+    normalized = normalized.replace(/\\ /g, ' ');
+    if (normalized.startsWith('~/') || normalized === '~') {
+        const suffix = normalized === '~' ? '' : normalized.slice(1);
+        normalized = join(os.homedir(), suffix);
+    }
+    return normalized;
+}
+
+function parseImageAttachInput(messageText: string): ImageAttachParseResult | null {
+    const trimmed = messageText.trim();
+    if (!trimmed) return null;
+
+    const match = trimmed.match(/^\/(image|img)\b/i);
+    if (match) {
+        const rest = trimmed.slice(match[0].length).trim();
+        const separator = ' -- ';
+        const sepIndex = rest.indexOf(separator);
+        const pathPart = (sepIndex >= 0 ? rest.slice(0, sepIndex) : rest).trim();
+        const promptPart = (sepIndex >= 0 ? rest.slice(sepIndex + separator.length) : '').trim();
+        return {
+            path: pathPart,
+            prompt: promptPart || undefined,
+            usedCommand: true,
+        };
+    }
+
+    // Convenience: allow pasting a single image path and hitting Enter.
+    const normalized = normalizeDraggedPath(trimmed);
+    const ext = extname(normalized).toLowerCase();
+    if (!LOCAL_IMAGE_EXTENSIONS.has(ext)) {
+        return null;
+    }
+
+    const resolved = isAbsolute(normalized) ? normalized : resolve(process.cwd(), normalized);
+    try {
+        const stats = fs.statSync(resolved);
+        if (!stats.isFile()) return null;
+    } catch {
+        return null;
+    }
+
+    return {
+        path: normalized,
+        usedCommand: false,
+    };
+}
+
+function attachLocalImage(rawPath: string, prompt?: string): { prompt: string; referencePath: string; copied: boolean } {
+    const normalized = normalizeDraggedPath(rawPath);
+    if (!normalized) {
+        throw new Error('Missing image path. Usage: /image <path> -- <optional prompt>');
+    }
+
+    const resolved = isAbsolute(normalized) ? normalized : resolve(process.cwd(), normalized);
+    const stats = fs.statSync(resolved);
+    if (!stats.isFile()) {
+        throw new Error('Image path is not a file.');
+    }
+
+    const ext = extname(resolved).toLowerCase();
+    if (!LOCAL_IMAGE_EXTENSIONS.has(ext)) {
+        throw new Error(`Unsupported image type "${ext || '(none)'}". Try PNG, JPG, or WEBP.`);
+    }
+
+    const cwd = process.cwd();
+    const relativeToCwd = relative(cwd, resolved);
+    const isInsideWorkspace = relativeToCwd && !relativeToCwd.startsWith('..') && !isAbsolute(relativeToCwd);
+
+    let referencePath: string;
+    let copied = false;
+
+    if (isInsideWorkspace) {
+        referencePath = relativeToCwd;
+    } else {
+        const attachmentDir = join(cwd, '.happy-attachments', 'images');
+        fs.mkdirSync(attachmentDir, { recursive: true });
+
+        const filename = `image-${Date.now()}-${randomUUID()}${ext}`;
+        const destination = join(attachmentDir, filename);
+        fs.copyFileSync(resolved, destination);
+        referencePath = relative(cwd, destination);
+        copied = true;
+    }
+
+    let markdownPath = toPosixPath(referencePath);
+    if (!markdownPath.startsWith('./') && !markdownPath.startsWith('../')) {
+        markdownPath = `./${markdownPath}`;
+    }
+
+    const effectivePrompt = prompt?.trim() ? prompt.trim() : 'Describe this image.';
+    return {
+        prompt: `![](${markdownPath})\n\n${effectivePrompt}`,
+        referencePath: markdownPath,
+        copied,
+    };
+}
 
 /**
  * Notify connected clients when Codex finishes processing and the queue is idle.
@@ -445,9 +578,27 @@ export async function runCodex(opts: {
                 await setMode('remote', 'Switched to remote mode');
             },
             onSubmitPrompt: async (prompt) => {
-                const messageText = prompt.trim();
+                let messageText = prompt.trim();
                 if (!messageText) {
                     return;
+                }
+
+                const imageInput = parseImageAttachInput(messageText);
+                if (imageInput) {
+                    try {
+                        const attached = attachLocalImage(imageInput.path, imageInput.prompt);
+                        messageText = attached.prompt;
+                        messageBuffer.addMessage(
+                            attached.copied
+                                ? `Attached image (copied into workspace): ${attached.referencePath}`
+                                : `Attached image: ${attached.referencePath}`,
+                            'status'
+                        );
+                    } catch (error) {
+                        const reason = error instanceof Error ? error.message : 'Unknown error';
+                        messageBuffer.addMessage(`Failed to attach image: ${reason}`, 'system');
+                        return;
+                    }
                 }
 
                 // Ensure we are in local mode when typing from the terminal.
